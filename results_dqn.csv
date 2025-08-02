@@ -1,0 +1,2 @@
+Algorithm,Avg Reward,Training Time (s),Notes
+DQN,40.0,9.94,Basic DQN baseline
