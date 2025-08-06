@@ -1,7 +1,7 @@
 import argparse
 import os
 from static_simulation import TeenEducationEnvironment
-from train_models.train_dqn import train_dqn
+from project_root.training.train_dqn import train_dqn
 # from training.pg_training import train_ppo, train_a2c
 import imageio
 import numpy as np
