@@ -119,6 +119,7 @@ class TeenEducationEnvironment(gym.Env):
         self.render_mode = render_mode
         self.screen = None
         self.clock = None
+        self.font = None
         
         if self.render_mode == "human":
             pygame.init()
@@ -208,7 +209,11 @@ class TeenEducationEnvironment(gym.Env):
                 'last_interaction_step': -10,  # When last interacted with
                 'interactions_count': 0,
                 'in_empowered_room': False,
-                'ready_for_room': False  # True when state >= 4 and trust >= 70
+                'ready_for_room': False,  # True when state >= 4 and trust >= 70
+
+                "previous_state": 0,
+                "rewarded_trust": False,
+                "already_counted": False
             }
             self.girls.append(girl)
     
@@ -277,39 +282,35 @@ class TeenEducationEnvironment(gym.Env):
     def _is_valid_position(self, x: int, y: int) -> bool:
         """Check if position is within bounds."""
         return 0 <= x < self.grid_width and 0 <= y < self.grid_height
-    
-    def _move_agent(self, action: int) -> bool:
-        """Move agent based on action. Returns True if move was successful."""
-        if hasattr(action, 'item'):
-            action = action.item()
-        elif isinstance(action, np.ndarray):
-            action = int(action)
 
-        new_pos = self.agent_pos.copy()
+    def _is_near_agent(self, girl: Dict) -> bool:
+        """Check if a girl is near the agent."""
+        distance = abs(self.agent_pos[0] - girl['pos'][0]) + abs(self.agent_pos[1] - girl['pos'][1])
+        return distance <= self.interaction_range
+    
+    def _move_agent(self, action: int) -> Tuple[int, int]:
+        """Move agent based on action. Returns True if move was successful."""
+        # if hasattr(action, 'item'):
+        #     action = action.item()
+        # elif isinstance(action, np.ndarray):
+        #     action = int(action)
+
+        # new_pos = self.agent_pos.copy()
         
         # Movement mapping
         moves = {
-            0: [0, -1],   # Move_Up
-            1: [0, 1],    # Move_Down
-            2: [-1, 0],   # Move_Left  
-            3: [1, 0],    # Move_Right
-            4: [-1, -1],  # Move_Up_Left
-            5: [1, -1],   # Move_Up_Right
-            6: [-1, 1],   # Move_Down_Left
-            7: [1, 1],    # Move_Down_Right
-            8: [0, 0]     # Stay_Still
+            0: (0, -1),  # Up
+            1: (0,  1),  # Down
+            2: (-1, 0),  # Left
+            3: ( 1, 0),  # Right
+            4: (-1, -1), # Up-Left
+            5: ( 1, -1), # Up-Right
+            6: (-1,  1), # Down-Left
+            7: ( 1,  1), # Down-Right
+            8: ( 0,  0)  # Stay_Still
         }
         
-        if action in moves:
-            dx, dy = moves[action]
-            new_pos[0] += dx
-            new_pos[1] += dy
-            
-            if self._is_valid_position(new_pos[0], new_pos[1]):
-                self.agent_pos = new_pos
-                return True
-        
-        return False
+        return moves.get(action, (0, 0))
     
     def _educational_interaction(self, action: int, girl: Dict) -> float:
         """Perform educational interaction with a girl. Returns reward."""
@@ -327,16 +328,25 @@ class TeenEducationEnvironment(gym.Env):
         
         # Update girl's state based on effectiveness
         previous_state = girl['state']
-        self._update_girl_state(girl, educational_action, effectiveness)
+        self._update_girl_state_single(girl, educational_action, effectiveness)
         
         # Update trust and engagement
-        self._update_girl_metrics(girl, educational_action, effectiveness)
+        self._update_girl_metrics_single(girl, educational_action, effectiveness)
         
         # Calculate reward
         reward = self._calculate_interaction_reward(girl, previous_state, effectiveness)
         
         return reward
-    
+
+    def _interact_with_nearby_girl(self) -> bool:
+        nearby_girls = self._get_nearby_girls()
+        if nearby_girls:
+            # Simple interaction - just increase trust slightly
+            girl = nearby_girls[0]
+            girl['trust'] = min(100, girl['trust'] + 5)
+            return True
+        return False
+
     def _guide_to_empowered_room(self, girl: Dict) -> float:
         """Guide a girl toward the empowered room. Returns reward."""
         reward = 0.0
@@ -400,7 +410,7 @@ class TeenEducationEnvironment(gym.Env):
         
         return base_effectiveness * trust_multiplier * random_factor
     
-    def _update_girl_metrics(self, girl: Dict, action: int, effectiveness: float):
+    def _update_girl_metrics_single(self, girl: Dict, action: int, effectiveness: float):
         """Update girl's trust, engagement, and knowledge based on interaction."""
         previous_trust = girl['trust']
         
@@ -422,13 +432,13 @@ class TeenEducationEnvironment(gym.Env):
         knowledge_gain = effectiveness * 5
         girl['knowledge'] = np.clip(girl['knowledge'] + knowledge_gain, 0, 100)
 
-    def _update_girl_state(self, girl: Dict, action: int, effectiveness: float):
+    def _update_girl_state_single(self, girl: Dict, action: int, effectiveness: float):
         """Update girl's emotional/knowledge state based on interaction."""
         previous_state = girl['state']
         
         if effectiveness > 0.7 and random.random() < 0.4:  # High effectiveness, chance to advance
             if girl['state'] < 5:
-                girl['state'] += 2
+                girl['state'] += 1
         elif effectiveness < 0.3 and random.random() < 0.2:  # Low effectiveness, small chance to regress
             if girl['state'] > 0:
                 girl['state'] -= 1
@@ -439,6 +449,23 @@ class TeenEducationEnvironment(gym.Env):
         # If girl's state regressed, move her slightly away from empowered room
         elif girl['state'] < previous_state:
             self._move_girl_away_from_empowered_room(girl, effectiveness)
+
+    def _update_girl_state(self):
+        """Update all girls' states slightly over time."""
+        for girl in self.girls:
+            # Small chance for state to change naturally over time
+            if random.random() < 0.01:  # 1% chance per step
+                if random.random() < 0.7:  # 70% chance to improve
+                    girl['state'] = min(5, girl['state'] + 1)
+                else:  # 30% chance to regress
+                    girl['state'] = max(0, girl['state'] - 1)
+    
+    def _update_girl_metrics(self):
+        """Update all girls' metrics slightly over time."""
+        for girl in self.girls:
+            # Slight trust decay if not interacted with recently
+            if self.current_step - girl['last_interaction_step'] > 10:
+                girl['trust'] = max(0, girl['trust'] - 0.5)
     
     def _move_girl_toward_empowered_room(self, girl: Dict, effectiveness: float = 1.0):
         """Move a girl 1-2 steps closer to the empowered room when she advances in state."""
@@ -539,6 +566,11 @@ class TeenEducationEnvironment(gym.Env):
                     return
                 
                 girl['pos'] = [new_x, new_y]
+
+    @property
+    def get_girls_in_room(self):
+        """Get number of girls currently in the empowered room."""
+        return sum(1 for girl in self.girls if girl['in_empowered_room'])
     
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Reset the environment to initial state."""
@@ -546,6 +578,7 @@ class TeenEducationEnvironment(gym.Env):
         
         self.current_step = 0
         self.agent_pos = [0, 0]  # Start in top-left corner
+        self.previous_state = None
         self.reset_girls()
         self._update_room_status()
         
@@ -556,119 +589,80 @@ class TeenEducationEnvironment(gym.Env):
             "girls_in_room": 0,
             "girls_ready_for_room": sum(1 for girl in self.girls if girl['ready_for_room'])
         }
-        
+
         return observation, info
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """Execute one step in the environment."""
-        if hasattr(action, 'item'):
-            action = action.item()
-        elif isinstance(action, np.ndarray):
-            action = int(action)
-
-        
-        if not self.action_space.contains(action):
-            raise ValueError(f"Invalid action {action}")
-        
-        reward = 0.0
         self.current_step += 1
-        
-        if action <= 8:  # Movement action
-            moved = self._move_agent(action)
-            if moved:
-                # REDUCE movement reward - make interaction more attractive
-                reward += 0.5 
-            else:
-                reward -= 1.0  # Penalty for trying to move out of bounds
-                
-            # PENALTY for moving when there are nearby girls who need help
+        reward = 0.0
+        terminated = False
+        truncated = False
+        meaningful_action = False
+
+        # ---- Agent Movement ----
+        if action in range(9):  # Actions 0-8 are movement/stay
+            dx, dy = self._move_agent(action)
+            new_x = self.agent_pos[0] + dx
+            new_y = self.agent_pos[1] + dy
+
+            # Validate movement
+            if self._is_valid_position(new_x, new_y):
+                self.agent_pos = [new_x, new_y]
+                if action != 8:  # Not staying still
+                    meaningful_action = True
+
+        # ---- Educational Interactions ----
+        elif action in range(9, 15):  # Actions 9-14 are educational
             nearby_girls = self._get_nearby_girls()
             if nearby_girls:
-                # Check if any nearby girl needs help
-                needs_help = any(not girl['in_empowered_room'] for girl in nearby_girls)
-                if needs_help and action != 8:  # Moving away when help is needed (except staying still)
-                    reward -= 0.5  # Penalty for abandoning girls who need help
-        
-        elif action <= 14:  # Educational action (9-14)
-            nearby_girls = self._get_nearby_girls()
-            if nearby_girls:
-                # Interact with the first nearby girl (could be extended to choose)
-                girl = nearby_girls[0]
-                interaction_reward = self._educational_interaction(action, girl)
-                reward += interaction_reward
-                
-                # BONUS for taking educational action when near girls
-                reward += 1.0  # Always reward for trying to educate
-                
+                girl = nearby_girls[0]  # Interact with first nearby girl
+                reward += self._educational_interaction(action, girl)
+                meaningful_action = True
             else:
-                reward -= 1.0  # Reduced penalty (was -2.0)
-        
-        elif action == 15:  # Guide to empowered room action
+                reward -= 5.0  # Penalty for trying to educate with no one nearby
+
+        # ---- Guidance Action ----
+        elif action == 15:  # Guide to empowered room
             nearby_girls = self._get_nearby_girls()
             if nearby_girls:
                 girl = nearby_girls[0]
-                guidance_reward = self._guide_to_empowered_room(girl)
-                reward += guidance_reward
-                
-                # BONUS for taking guidance action
-                reward += 0.5  # Small bonus for attempting guidance
-                
+                reward += self._guide_to_empowered_room(girl)
+                meaningful_action = True
             else:
-                reward -= 1.0  # Reduced penalty (was -2.0)
-        
-        # Move girls occasionally
+                reward -= 5.0  # Penalty for trying to guide with no one nearby
+
+        # ---- Penalize Meaningless Actions ----
+        if not meaningful_action:
+            reward -= 0.2  # Mild penalty for doing nothing useful
+
+        # Update environment state
         self._move_girls_randomly()
-        
-        # Update room status
+        self._update_girl_state()
+        self._update_girl_metrics()
         self._update_room_status()
-        
-        # Calculate termination conditions
-        girls_in_room = sum(1 for girl in self.girls if girl['in_empowered_room'])
-        avg_trust = np.mean([girl['trust'] for girl in self.girls])
-        
-        terminated = (
-            girls_in_room >= self.num_girls or  # All girls in empowered room
-            avg_trust <= 20 or  # Lost trust globally
-            self.current_step >= self.max_steps
-        )
-        
-        truncated = self.current_step >= self.max_steps
-        
-        # Reward for having girls in the empowered room (HIGHEST REWARDS!)
-        girls_in_room_reward = girls_in_room * 5.0  # 5 points per girl in room
-        reward += girls_in_room_reward
-        
-        # Exponential bonus for getting more girls in the room
-        if girls_in_room >= 2:
-            reward += girls_in_room ** 2 * 2  # Exponential scaling: 8, 18, 32, 50 for 2,3,4,5 girls
-        
-        # Mega bonus for getting ALL girls in the room
-        if girls_in_room == self.num_girls:
-            reward += 100  # Huge bonus for complete success
-        
-        # Distance-based reward (encourage moving toward girls who need help)
-        min_distance_to_needy = float('inf')
-        for girl in self.girls:
-            if not girl['in_empowered_room']:  # Not yet in room
-                distance = abs(self.agent_pos[0] - girl['pos'][0]) + abs(self.agent_pos[1] - girl['pos'][1])
-                min_distance_to_needy = min(min_distance_to_needy, distance)
-        
-        if min_distance_to_needy != float('inf'):
-            reward += max(0, 5 - min_distance_to_needy) * 0.1  # Reward for being close to girls who need help
-        
-        observation = self._get_observation()
+
+        # Additional reward: small reward for each girl in the room
+        reward += 0.5 * sum(girl["in_empowered_room"] for girl in self.girls)
+
+        observation = self._get_observation
+
         info = {
             "agent_pos": self.agent_pos,
             "girls_states": [girl['state'] for girl in self.girls],
-            "girls_in_room": girls_in_room,
+            "girls_in_room": self.get_girls_in_room,
             "girls_ready_for_room": sum(1 for girl in self.girls if girl['ready_for_room']),
-            "average_trust": avg_trust,
-            "nearby_girls": len(self._get_nearby_girls()),
-            "action_name": self.action_meanings[action]
+            "action_name": self.action_meanings[action] if hasattr(self, 'action_meanings') else str(action),
+            "average_trust": np.mean([girl['trust'] for girl in self.girls]),
+            "nearby_girls": [i for i, girl in enumerate(self.girls) if self._is_near_agent(girl)]
         }
-        
+
+        # End early if all girls are empowered
+        if info["girls_in_room"] == self.num_girls:
+            terminated = True
+            reward += 10.0  # Big bonus
+
         return observation, reward, terminated, truncated, info
-    
+
     def render(self):
         """Render the environment."""
         if self.render_mode == "rgb_array":
@@ -721,8 +715,9 @@ class TeenEducationEnvironment(gym.Env):
         pygame.draw.rect(self.screen, (50, 150, 50), room_rect, 3)
         
         # Room label
-        label = self.font.render("EMPOWERED ROOM", True, (0, 100, 0))
-        self.screen.blit(label, (room_rect[0] + 5, room_rect[1] + 5))
+        if self.font:
+            label = self.font.render("EMPOWERED ROOM", True, (0, 100, 0))
+            self.screen.blit(label, (room_rect[0] + 5, room_rect[1] + 5))
         
         # Draw grid
         for x in range(0, self.width, self.grid_size):
@@ -758,8 +753,9 @@ class TeenEducationEnvironment(gym.Env):
             pygame.draw.circle(self.screen, (0, 0, 0), (x, y), 15, 2)
             
             # State label
-            state_label = self.font.render(f"G{girl['id']}", True, (0, 0, 0))
-            self.screen.blit(state_label, (x - 8, y - 5))
+            if self.font:
+                state_label = self.font.render(f"G{girl['id']}", True, (0, 0, 0))
+                self.screen.blit(state_label, (x - 8, y - 5))
             
             # Trust level as a small bar
             trust_width = int(girl['trust'] / 100 * 20)
@@ -767,7 +763,7 @@ class TeenEducationEnvironment(gym.Env):
             pygame.draw.rect(self.screen, (0, 255, 0), (x - 10, y + 20, trust_width, 3))
             
             # Ready indicator
-            if girl['ready_for_room']:
+            if girl['ready_for_room'] and self.font:
                 ready_label = self.font.render("READY", True, (0, 150, 0))
                 self.screen.blit(ready_label, (x - 15, y + 25))
         
@@ -780,8 +776,9 @@ class TeenEducationEnvironment(gym.Env):
                         (agent_x - 12, agent_y - 12, 24, 24), 2)
         
         # Agent label
-        agent_label = self.font.render("AI", True, (255, 255, 255))
-        self.screen.blit(agent_label, (agent_x - 8, agent_y - 5))
+        if self.font:
+            agent_label = self.font.render("AI", True, (255, 255, 255))
+            self.screen.blit(agent_label, (agent_x - 8, agent_y - 5))
         
         # Draw interaction range
         nearby_girls = self._get_nearby_girls()
@@ -805,28 +802,30 @@ class TeenEducationEnvironment(gym.Env):
         
         # Add GIF recording indicator
         if self.record_gif:
-            info_texts.append(f"🔴 Recording GIF ({len(self.gif_frames)} frames)")
+            info_texts.append(f"Recording GIF ({len(self.gif_frames)} frames)")
         
-        for i, text in enumerate(info_texts):
-            text_surface = self.font.render(text, True, (0, 0, 0))
-            self.screen.blit(text_surface, (10, 10 + i * 20))
+        if self.font:
+            for i, text in enumerate(info_texts):
+                text_surface = self.font.render(text, True, (0, 0, 0))
+                self.screen.blit(text_surface, (10, 10 + i * 20))
         
         # Legend
-        legend_y = self.height - 170
-        legend_text = self.font.render("Girl States:", True, (0, 0, 0))
-        self.screen.blit(legend_text, (10, legend_y))
+        if self.font:
+            legend_y = self.height - 170
+            legend_text = self.font.render("Girl States:", True, (0, 0, 0))
+            self.screen.blit(legend_text, (10, legend_y))
         
-        for i, (state_id, state_name) in enumerate(self.girl_states.items()):
-            color = colors['girl_states'][state_id]
-            y_pos = legend_y + 20 + i * 15
-            pygame.draw.circle(self.screen, color, (15, y_pos + 5), 5)
-            state_text = self.font.render(state_name, True, (0, 0, 0))
-            self.screen.blit(state_text, (25, y_pos))
-        
-        # Action legend
-        action_legend_y = legend_y + 110
-        action_text = self.font.render("Actions: Move(0-8), Educate(9-14), Guide(15)", True, (0, 0, 0))
-        self.screen.blit(action_text, (10, action_legend_y))
+            for i, (state_id, state_name) in enumerate(self.girl_states.items()):
+                color = colors['girl_states'][state_id]
+                y_pos = legend_y + 20 + i * 15
+                pygame.draw.circle(self.screen, color, (15, y_pos + 5), 5)
+                state_text = self.font.render(state_name, True, (0, 0, 0))
+                self.screen.blit(state_text, (25, y_pos))
+            
+            # Action legend
+            action_legend_y = legend_y + 110
+            action_text = self.font.render("Actions: Move(0-8), Educate(9-14), Guide(15)", True, (0, 0, 0))
+            self.screen.blit(action_text, (10, action_legend_y))
         
         # Return RGB array for both render modes when needed
         if self.render_mode == "rgb_array" or self.record_gif:
@@ -856,58 +855,63 @@ def demo_spatial_environment_with_gif():
     print("Goal: Guide all girls to the green 'EMPOWERED ROOM' after educating them")
     print("Girls must be in state 4+ with 65+ trust to be ready for the room")
     print()
-    
-    for episode in range(3):
-        print(f"\n--- Episode {episode + 1} ---")
-        
-        # Start GIF recording for this episode
-        gif_filename = f"teen_education_episode_{episode + 1}.gif"
-        env.start_gif_recording(gif_filename, frame_skip=2)  # Record every 2nd frame to reduce file size
-        
-        observation, info = env.reset()
-        total_reward = 0
-        
-        for step in range(100):  # Reduced steps for shorter GIF
-            # Intelligent action selection for demo
-            nearby_girls = env._get_nearby_girls()
+    try:
+        for episode in range(10):
+            print(f"\n--- Episode {episode + 1} ---")
             
-            if nearby_girls:
-                girl = nearby_girls[0]
-                if girl['ready_for_room'] and not girl['in_empowered_room'] and random.random() < 0.8:
-                    action = 15  # Guide to empowered room
-                    action_type = "Guidance"
-                elif random.random() < 0.7:
-                    action = random.randint(9, 14)  # Educational action
-                    action_type = "Educational"
+            # Start GIF recording for this episode
+            gif_filename = f"teen_education_episode_{episode + 1}.gif"
+            env.start_gif_recording(gif_filename, frame_skip=2)  # Record every 2nd frame to reduce file size
+            
+            observation, info = env.reset()
+            total_reward = 0
+            
+            for step in range(300):  # Reduced steps for shorter GIF
+                # Intelligent action selection for demo
+                nearby_girls = env._get_nearby_girls()
+                
+                if nearby_girls:
+                    girl = nearby_girls[0]
+                    if girl['ready_for_room'] and not girl['in_empowered_room'] and random.random() < 0.8:
+                        action = 15  # Guide to empowered room
+                        action_type = "Guidance"
+                    elif random.random() < 0.7:
+                        action = random.randint(9, 14)  # Educational action
+                        action_type = "Educational"
+                    else:
+                        action = random.randint(0, 8)   # Movement action  
+                        action_type = "Movement"
                 else:
                     action = random.randint(0, 8)   # Movement action  
                     action_type = "Movement"
-            else:
-                action = random.randint(0, 8)   # Movement action  
-                action_type = "Movement"
+                
+                observation, reward, terminated, truncated, info = env.step(action)
+                total_reward += reward
+                
+                print(f"Step {step + 1}: {action_type} action {action} "
+                    f"({info['action_name']}) -> Reward: {reward:.2f}")
+                print(f"  Agent at ({info['agent_pos'][0]}, {info['agent_pos'][1]}), "
+                    f"In Room: {info['girls_in_room']}/{env.num_girls}, "
+                    f"Ready: {info['girls_ready_for_room']}, "
+                    f"Avg Trust: {info['average_trust']:.1f}%")
+                
+                env.render()
+                
+                if terminated or truncated:
+                    print(f"Episode ended! Total reward: {total_reward:.2f}")
+                    print(f"Final girls in room: {info['girls_in_room']}/{env.num_girls}")
+                    break
             
-            observation, reward, terminated, truncated, info = env.step(action)
-            total_reward += reward
-            
-            print(f"Step {step + 1}: {action_type} action {action} "
-                  f"({info['action_name']}) -> Reward: {reward:.2f}")
-            print(f"  Agent at ({info['agent_pos'][0]}, {info['agent_pos'][1]}), "
-                  f"In Room: {info['girls_in_room']}/{env.num_girls}, "
-                  f"Ready: {info['girls_ready_for_room']}, "
-                  f"Avg Trust: {info['average_trust']:.1f}%")
-            
-            env.render()
-            
-            if terminated or truncated:
-                print(f"Episode ended! Total reward: {total_reward:.2f}")
-                print(f"Final girls in room: {info['girls_in_room']}/{env.num_girls}")
-                break
-        
-        # Stop GIF recording and save
-        env.stop_gif_recording()
-        print(f"GIF saved as: {gif_filename}")
-    
-    env.close()
+            # Stop GIF recording and save
+            env.stop_gif_recording()
+            print(f"GIF saved as: {gif_filename}")
+
+    except Exception as e:
+        print(f"Error during demo: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:    
+        env.close()
 
 # Alternative function for manual GIF control
 def demo_with_manual_gif_control():
@@ -922,7 +926,7 @@ def demo_with_manual_gif_control():
     
     # Run for a bit without recording
     print("Running 20 steps without recording...")
-    for step in range(20):
+    for step in range(200):
         action = random.randint(0, 15)
         observation, reward, terminated, truncated, info = env.step(action)
         env.render()
@@ -934,7 +938,7 @@ def demo_with_manual_gif_control():
     env.start_gif_recording("manual_recording.gif", frame_skip=1)
     
     # Run with recording
-    for step in range(50):
+    for step in range(200):
         nearby_girls = env._get_nearby_girls()
         if nearby_girls and random.random() < 0.6:
             action = random.randint(9, 15)  # Prefer interactions
@@ -953,6 +957,37 @@ def demo_with_manual_gif_control():
     
     env.close()
 
+def test_environment():
+    """Simple test to verify the environment works."""
+    print("=== Testing Environment ===")
+    
+    try:
+        env = TeenEducationEnvironment(render_mode=None)  # No rendering for test
+        print("Environment created successfully!")
+        
+        observation, info = env.reset()
+        print(f"Reset successful. Observation shape: {observation.shape}")
+        print(f"Initial info: {info}")
+        
+        # Test a few steps
+        for step in range(5):
+            action = env.action_space.sample()
+            observation, reward, terminated, truncated, info = env.step(action)
+            print(f"Step {step + 1}: Action {action}, Reward {reward:.2f}, Info: {info['action_name']}")
+            
+            if terminated or truncated:
+                break
+        
+        env.close()
+        print("Environment test completed successfully!")
+        
+    except Exception as e:
+        print(f"Error during test: {e}")
+        import traceback
+        traceback.print_exc()
+
 if __name__ == "__main__":
     # Run the demo with GIF recording
     demo_spatial_environment_with_gif()
+    
+    test_environment()

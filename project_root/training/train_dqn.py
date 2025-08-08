@@ -1,3 +1,4 @@
+import os
 import time
 import gymnasium as gym
 from matplotlib import pyplot as plt
@@ -10,13 +11,14 @@ import sys
 from pathlib import Path
 import torch
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
 
 # Adding parent directory to Python path
 parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
 # Import the updated spatial environment
-from project_root.environment.custom_environment import TeenEducationEnvironment
+from environment.custom_environment import TeenEducationEnvironment
 
 
 class RewardTrackerCallback(BaseCallback):
@@ -44,6 +46,13 @@ class RewardTrackerCallback(BaseCallback):
 def train_dqn():
     # Initialize environment
     env = TeenEducationEnvironment()
+
+    log_dir = "..models.logs.dqn"
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Wrap environment with Monitor to enable logging
+    env = TeenEducationEnvironment()
+    env = Monitor(env, log_dir)
     
     # Check environment compatibility
     check_env(env, warn=True)
