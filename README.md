@@ -145,11 +145,13 @@ project_root/
 ├── environment/
 │   └── custom_environment.py   # TeenEducationEnvironment
 │
-├── train_dqn.py                # DQN training script
-├── train_ppo.py                # PPO training script
-├── train_a2c.py                 # A2C training script
-├── train_reinforce.py           # REINFORCE training script
-├── utils/                       # Callbacks, plotting, etc.
+├── training/
+|    └── training_dqn.py        # DQN training script
+|    |__ training_pg.py         # PG training script
+├── models/
+|    └── dqn
+|    └── pq
+|__ requirements.txt                      
 └── README.md
 ```
 
