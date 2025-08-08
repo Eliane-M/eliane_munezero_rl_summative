@@ -88,7 +88,7 @@ The
 
 ---
 
-## 📊 Results & Analysis
+## Results & Analysis
 
 | Algorithm  | Success Rate (%) | Sample Efficiency | Stability | Training Time |
 |------------|------------------|-------------------|-----------|---------------|
@@ -105,31 +105,52 @@ The
 
 ---
 
-## 📈 Graphs & Visualizations
+## Graphs & Visualizations
 Generated during training:
 - Reward per Episode
   <img width="633" height="562" alt="image" src="https://github.com/user-attachments/assets/bce22091-8cd9-4db2-bfd5-44d5b2570b74" />
-
-- Cumulative Rewards
   
 - Success Rate over Time
   <img width="690" height="547" alt="image" src="https://github.com/user-attachments/assets/579c2e47-de71-4cb8-9d78-b23523c62cfa" />
 
 - Action Distribution
+  <img width="658" height="572" alt="image" src="https://github.com/user-attachments/assets/1e3f71d3-5014-4538-a580-83e04abcff61" />
+
 - Average Q-Values (DQN)
+  <img width="645" height="380" alt="image" src="https://github.com/user-attachments/assets/782dcaa7-71bc-45d8-8df6-20e2717510c2" />
+
 
 ---
 
-## ⚙️ Installation & Setup
-
-### Prerequisites
-- Python 3.8+
-- [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3)
-- PyTorch
-- NumPy
-- Matplotlib
-- Gymnasium
+## Installation & Setup
 
 ### Installation
-```bash
-pip install stable-baselines3[extra] torch numpy matplotlib gymnasium
+```
+pip install -r requirements.txt
+```
+
+### Run the training (The demo GIFs will auto-generate after the training)
+```
+python train_dqn.py
+```
+
+```
+python train_pg.py
+```
+
+### Repository structure
+```
+project_root/
+│
+├── environment/
+│   └── custom_environment.py   # TeenEducationEnvironment
+│
+├── train_dqn.py                # DQN training script
+├── train_ppo.py                # PPO training script
+├── train_a2c.py                 # A2C training script
+├── train_reinforce.py           # REINFORCE training script
+├── utils/                       # Callbacks, plotting, etc.
+└── README.md
+```
+
+-----THANK YOU !! ------
